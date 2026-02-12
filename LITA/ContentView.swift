@@ -8,17 +8,35 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var photoManager = PhotoManager()
+    @State private var selectedAlbum: AlbumInfo?
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            if let album = selectedAlbum {
+                SnowGlobeView(
+                    photoManager: photoManager,
+                    album: album,
+                    onBack: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            selectedAlbum = nil
+                        }
+                    }
+                )
+                .transition(.opacity)
+            } else {
+                AlbumPickerView(
+                    photoManager: photoManager,
+                    selectedAlbum: $selectedAlbum
+                )
+                .transition(.opacity)
+            }
         }
-        .padding()
+        .animation(.easeInOut(duration: 0.3), value: selectedAlbum)
     }
 }
 
 #Preview {
     ContentView()
+        .preferredColorScheme(.dark)
 }
