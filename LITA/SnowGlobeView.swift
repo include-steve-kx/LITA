@@ -3,6 +3,7 @@
 //  LITA
 //
 
+import CoreLocation
 import Photos
 import SceneKit
 import SwiftUI
@@ -16,9 +17,7 @@ struct SceneKitContainer: UIViewRepresentable {
         return controller.scnView
     }
 
-    func updateUIView(_ uiView: ShakableSCNView, context: Context) {
-        // Updates are handled imperatively through the controller
-    }
+    func updateUIView(_ uiView: ShakableSCNView, context: Context) {}
 }
 
 // MARK: - Snow Globe View
@@ -29,11 +28,14 @@ struct SnowGlobeView: View {
     let onBack: () -> Void
 
     @StateObject private var sceneController = SnowGlobeSceneController()
-    @State private var showingMemory = false
-    @State private var memoryImage: UIImage?
-    @State private var memoryAsset: PHAsset?
     @State private var isAnimating = false
     @State private var showHint = true
+    @State private var showDebug = false
+
+    // Memory location state
+    @State private var memoryAsset: PHAsset?
+    @State private var memoryPlaceName: String?
+    @State private var showMap = false
 
     var body: some View {
         ZStack {
@@ -53,26 +55,50 @@ struct SnowGlobeView: View {
                             .background(.ultraThinMaterial, in: Circle())
                     }
                     Spacer()
+
+                    Button(action: { showDebug = true }) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.title3)
+                            .foregroundColor(.white.opacity(0.5))
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
 
                 Spacer()
 
-                // Loading indicator
-                if photoManager.isLoading && photoManager.thumbnails.isEmpty {
+                // Loading thumbnails
+                if photoManager.isLoading {
                     VStack(spacing: 8) {
-                        ProgressView()
-                            .tint(.white)
-                        Text("Loading memories...")
+                        ProgressView(value: photoManager.loadingProgress)
+                            .progressViewStyle(.linear)
+                            .tint(.white.opacity(0.7))
+                            .frame(width: 180)
+                        Text("Loading memories… \(Int(photoManager.loadingProgress * 100))%")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.5))
                     }
+                    .padding(.top, 12)
                     Spacer()
                 }
 
-                // Hint text
-                if showHint && !photoManager.thumbnails.isEmpty {
+                // Downloading hi-res memory from iCloud
+                if photoManager.isFetchingMemory {
+                    VStack(spacing: 6) {
+                        ProgressView(value: photoManager.memoryDownloadProgress)
+                            .progressViewStyle(.linear)
+                            .tint(.white.opacity(0.7))
+                            .frame(width: 160)
+                        Text("Fetching photo…")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                }
+
+                // Hint
+                if showHint && !photoManager.thumbnails.isEmpty && !sceneController.isShowingMemory {
                     Text("Shake to stir up some memories")
                         .font(.callout)
                         .foregroundColor(.white.opacity(0.5))
@@ -80,83 +106,131 @@ struct SnowGlobeView: View {
                         .padding(.bottom, 8)
                 }
 
-                // Random Memory button
+                // Bottom controls
                 if !photoManager.thumbnails.isEmpty {
-                    Button(action: revealRandomMemory) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "sparkles")
-                            Text("Show me a memory")
-                        }
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 14)
-                        .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    .disabled(isAnimating)
-                    .opacity(isAnimating ? 0.5 : 1.0)
-                    .padding(.bottom, 50)
-                }
-            }
+                    if sceneController.isShowingMemory {
+                        // Memory info + controls
+                        VStack(spacing: 10) {
+                            // Date
+                            if let date = memoryAsset?.creationDate {
+                                Text(date, style: .date)
+                                    .font(.callout.weight(.light))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
 
-            // Memory Detail Overlay
-            if showingMemory, let image = memoryImage {
-                MemoryDetailView(
-                    image: image,
-                    asset: memoryAsset,
-                    onDismiss: {
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            showingMemory = false
+                            // Place name
+                            if let name = memoryPlaceName {
+                                Text(name)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.5))
+                            }
+
+                            HStack(spacing: 16) {
+                                // "See where this was" button
+                                if memoryAsset?.location != nil {
+                                    Button(action: { showMap = true }) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "globe.americas.fill")
+                                            Text("See where")
+                                        }
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 18)
+                                        .padding(.vertical, 10)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                    }
+                                }
+
+                                // Dismiss
+                                Button(action: {
+                                    sceneController.dismissMemory()
+                                    memoryAsset = nil
+                                    memoryPlaceName = nil
+                                }) {
+                                    Image(systemName: "xmark")
+                                        .font(.title3.bold())
+                                        .foregroundColor(.white.opacity(0.9))
+                                        .padding(12)
+                                        .background(.ultraThinMaterial, in: Circle())
+                                }
+                            }
                         }
+                        .padding(.bottom, 50)
+                        .transition(.opacity)
+                    } else {
+                        // Show Memory button
+                        Button(action: revealRandomMemory) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "sparkles")
+                                Text("Show me a memory")
+                            }
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 14)
+                            .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .disabled(isAnimating)
+                        .opacity(isAnimating ? 0.5 : 1.0)
+                        .padding(.bottom, 50)
+                        .transition(.opacity)
                     }
-                )
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                .zIndex(1)
+                }
             }
         }
         .onAppear {
             photoManager.loadThumbnails(from: album)
-            // Hide hint after a few seconds
+            sceneController.startDeviceMotion()
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
                 withAnimation { showHint = false }
             }
         }
+        .onDisappear {
+            sceneController.stopDeviceMotion()
+        }
         .onReceive(photoManager.$thumbnails) { thumbnails in
             sceneController.updateThumbnails(thumbnails)
+        }
+        .sheet(isPresented: $showDebug) {
+            DebugOverlayView(controller: sceneController)
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showMap) {
+            if let location = memoryAsset?.location {
+                GlobeMapView(location: location, placeName: memoryPlaceName)
+            }
         }
     }
 
     // MARK: - Random Memory Flow
 
     private func revealRandomMemory() {
-        guard !isAnimating else { return }
+        guard !isAnimating, !sceneController.isShowingMemory else { return }
         isAnimating = true
         withAnimation { showHint = false }
 
-        let group = DispatchGroup()
-
-        // Fetch a random full-resolution photo from the entire album
-        group.enter()
         photoManager.fetchRandomPhoto { image, asset in
-            self.memoryImage = image
-            self.memoryAsset = asset
-            group.leave()
+            DispatchQueue.main.async {
+                if let image {
+                    self.memoryAsset = asset
+                    self.sceneController.showMemory(image: image)
+                    self.resolveLocation(for: asset)
+                }
+                self.isAnimating = false
+            }
         }
+    }
 
-        // Animate a snowflake flying out of the globe
-        group.enter()
-        sceneController.flyOutAnimation {
-            group.leave()
-        }
-
-        // Show memory when both are ready
-        group.notify(queue: .main) {
-            if self.memoryImage != nil {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    self.showingMemory = true
+    private func resolveLocation(for asset: PHAsset?) {
+        guard let location = asset?.location else { return }
+        CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            if let pm = placemarks?.first {
+                let parts = [pm.locality, pm.administrativeArea, pm.country]
+                    .compactMap { $0 }
+                DispatchQueue.main.async {
+                    self.memoryPlaceName = parts.joined(separator: ", ")
                 }
             }
-            self.isAnimating = false
         }
     }
 }

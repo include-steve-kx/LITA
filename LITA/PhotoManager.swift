@@ -25,6 +25,9 @@ class PhotoManager: ObservableObject {
     @Published var albums: [AlbumInfo] = []
     @Published var thumbnails: [UIImage] = []
     @Published var isLoading = false
+    @Published var loadingProgress: Double = 0   // 0…1 for thumbnail batch
+    @Published var isFetchingMemory = false
+    @Published var memoryDownloadProgress: Double = 0  // 0…1 for single hi-res photo
     @Published var permissionGranted = false
     @Published var permissionDenied = false
 
@@ -107,10 +110,11 @@ class PhotoManager: ObservableObject {
         self.albums = results.sorted { $0.count > $1.count }
     }
 
-    // MARK: - Load Thumbnails (random sample of ~100)
+    // MARK: - Load Thumbnails (random sample of ~200)
 
-    func loadThumbnails(from album: AlbumInfo, maxCount: Int = 100) {
+    func loadThumbnails(from album: AlbumInfo, maxCount: Int = 200) {
         isLoading = true
+        loadingProgress = 0
         thumbnails = []
 
         let fetchOptions = PHFetchOptions()
@@ -140,6 +144,7 @@ class PhotoManager: ObservableObject {
         options.isNetworkAccessAllowed = true
         options.resizeMode = .fast
 
+        let total = Double(sampleCount)
         for index in selectedIndices {
             let asset = assets.object(at: index)
             imageManager.requestImage(
@@ -151,6 +156,7 @@ class PhotoManager: ObservableObject {
                 guard let self = self, let image = image else { return }
                 DispatchQueue.main.async {
                     self.thumbnails.append(image)
+                    self.loadingProgress = Double(self.thumbnails.count) / total
                     if self.thumbnails.count >= sampleCount {
                         self.isLoading = false
                     }
@@ -175,20 +181,30 @@ class PhotoManager: ObservableObject {
         let randomIndex = Int.random(in: 0..<assets.count)
         let asset = assets.object(at: randomIndex)
 
+        isFetchingMemory = true
+        memoryDownloadProgress = 0
+
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         options.resizeMode = .exact
+        options.progressHandler = { [weak self] progress, _, _, _ in
+            DispatchQueue.main.async {
+                self?.memoryDownloadProgress = progress
+            }
+        }
 
         PHImageManager.default().requestImage(
             for: asset,
             targetSize: CGSize(width: 1024, height: 1024),
             contentMode: .aspectFit,
             options: options
-        ) { image, info in
+        ) { [weak self] image, info in
             let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
             guard !isDegraded else { return }
             DispatchQueue.main.async {
+                self?.isFetchingMemory = false
+                self?.memoryDownloadProgress = 1
                 completion(image, asset)
             }
         }
